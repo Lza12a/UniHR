@@ -2,10 +2,7 @@
 
 ### 🔎 Requirements
 - `PyTorch 1.10.0`
-- `torch-scatter  2.0.9`
-- `torch-sparse 0.6.13`
-- `torch-cluster 1.6.0`
-- `torch-geometric 2.1.0.post1`
+- `dgl 0.9.1post1`
 - `numpy 1.23.3`
 
 All the experiments are conducted on a single 80G NVIDIA A800.
