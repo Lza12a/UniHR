@@ -169,11 +169,11 @@ class Global(nn.Module):
                 tmp = self.layers0[i](self.graph_gat, ent_embedding).reshape(ent_embedding.shape[0], -1)
                 tmp = self.activate(tmp)
                 ent_embedding = ent_embedding + tmp
-                # tmp1, tmp2 = self.layers1[i](self.graph, ent_embedding, rel_embedding, self.edge_type, self.edge_norm, self.is_atomic)
-                # tmp1 = self.activate(tmp1)
-                # tmp2 = self.activate(tmp2)
-                # ent_embedding = ent_embedding + tmp1
-                # rel_embedding = rel_embedding + tmp2
+                tmp1, tmp2 = self.layers1[i](self.graph, ent_embedding, rel_embedding, self.edge_type, self.edge_norm, self.is_atomic)
+                tmp1 = self.activate(tmp1)
+                tmp2 = self.activate(tmp2)
+                ent_embedding = ent_embedding + tmp1
+                rel_embedding = rel_embedding + tmp2
         if self.dataset not in ["FBHE","FBH","DBHE"]:
             return torch.cat([self.special_embedding, rel_embedding[:self.rel_num], ent_embedding[:self.ent_num]], dim=0)
         elif self.nest_meta:
