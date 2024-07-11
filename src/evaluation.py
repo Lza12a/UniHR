@@ -42,7 +42,7 @@ def generate_ground_truth(ground_truth_path, vocabulary, max_arity, max_seq_leng
 
     return gt_dict
 
-def batch_evaluation(global_idx, batch_results, all_features, gt_dict, is_temp, dataset, r_num, e_num):
+def batch_evaluation(global_idx, batch_results, all_features, gt_dict, is_temp, nest_meta, dataset, r_num, e_num):
     ret_ranks = {
         'entity': [],
         'relation': [],
@@ -81,6 +81,15 @@ def batch_evaluation(global_idx, batch_results, all_features, gt_dict, is_temp, 
         # temporal filter time related entities
         if(is_temp and pos in [0,2]):
             result[2+e_num+r_num:] = -np.Inf
+        
+        # nested kg
+        if dataset in ["FBH", "FBHE", "DBHE"]:
+            if pos in [0,2] and nest_meta:
+                result[:2+r_num+e_num] = -np.Inf
+            elif pos in [0,2] and not nest_meta:
+                result[:2+r_num] = -np.Inf
+                result[2+r_num+e_num:] = -np.Inf
+        
         rank = (result >= result[target]).sum()
         assert rank >= 1
         
@@ -140,60 +149,70 @@ def compute_metrics(ent_lst, rel_lst, _2_r_lst, _2_ht_lst, _n_r_lst, _n_ht_lst,
     all_r_ranks = np.array(_2_r_lst + _n_r_lst).ravel()
     all_ht_ranks = np.array(_2_ht_lst + _n_ht_lst).ravel()
 
+    mr_ent = np.mean(all_ent_ranks)
     mrr_ent = np.mean(1.0 / all_ent_ranks)
     hits1_ent = np.mean(all_ent_ranks <= 1.0)
     hits3_ent = np.mean(all_ent_ranks <= 3.0)
     hits5_ent = np.mean(all_ent_ranks <= 5.0)
     hits10_ent = np.mean(all_ent_ranks <= 10.0)
 
+    mr_rel = np.mean(all_rel_ranks)
     mrr_rel = np.mean(1.0 / all_rel_ranks)
     hits1_rel = np.mean(all_rel_ranks <= 1.0)
     hits3_rel = np.mean(all_rel_ranks <= 3.0)
     hits5_rel = np.mean(all_rel_ranks <= 5.0)
     hits10_rel = np.mean(all_rel_ranks <= 10.0)
 
+    mr_2r = np.mean(_2_r_ranks)
     mrr_2r = np.mean(1.0 / _2_r_ranks)
     hits1_2r = np.mean(_2_r_ranks <= 1.0)
     hits3_2r = np.mean(_2_r_ranks <= 3.0)
     hits5_2r = np.mean(_2_r_ranks <= 5.0)
     hits10_2r = np.mean(_2_r_ranks <= 10.0)
 
+    mr_2ht = np.mean(_2_ht_ranks)
     mrr_2ht = np.mean(1.0 / _2_ht_ranks)
     hits1_2ht = np.mean(_2_ht_ranks <= 1.0)
     hits3_2ht = np.mean(_2_ht_ranks <= 3.0)
     hits5_2ht = np.mean(_2_ht_ranks <= 5.0)
     hits10_2ht = np.mean(_2_ht_ranks <= 10.0)
 
+    mr_nr = np.mean(_n_r_ranks)
     mrr_nr = np.mean(1.0 / _n_r_ranks)
     hits1_nr = np.mean(_n_r_ranks <= 1.0)
     hits3_nr = np.mean(_n_r_ranks <= 3.0)
     hits5_nr = np.mean(_n_r_ranks <= 5.0)
     hits10_nr = np.mean(_n_r_ranks <= 10.0)
 
+    mr_nht = np.mean(_n_ht_ranks)
     mrr_nht = np.mean(1.0 / _n_ht_ranks)
     hits1_nht = np.mean(_n_ht_ranks <= 1.0)
     hits3_nht = np.mean(_n_ht_ranks <= 3.0)
     hits5_nht = np.mean(_n_ht_ranks <= 5.0)
     hits10_nht = np.mean(_n_ht_ranks <= 10.0)
 
+    mr_na = np.mean(_n_a_ranks)
     mrr_na = np.mean(1.0 / _n_a_ranks)
     hits1_na = np.mean(_n_a_ranks <= 1.0)
     hits3_na = np.mean(_n_a_ranks <= 3.0)
     hits5_na = np.mean(_n_a_ranks <= 5.0)
     hits10_na = np.mean(_n_a_ranks <= 10.0)
 
+    mr_nv = np.mean(_n_v_ranks)
     mrr_nv = np.mean(1.0 / _n_v_ranks)
     hits1_nv = np.mean(_n_v_ranks <= 1.0)
     hits3_nv = np.mean(_n_v_ranks <= 3.0)
     hits5_nv = np.mean(_n_v_ranks <= 5.0)
     hits10_nv = np.mean(_n_v_ranks <= 10.0)
 
+    mr_r = np.mean(all_r_ranks)
     mrr_r = np.mean(1.0 / all_r_ranks)
     hits1_r = np.mean(all_r_ranks <= 1.0)
     hits3_r = np.mean(all_r_ranks <= 3.0)
     hits5_r = np.mean(all_r_ranks <= 5.0)
     hits10_r = np.mean(all_r_ranks <= 10.0)
 
+    mr_ht = np.mean(all_ht_ranks)
     mrr_ht = np.mean(1.0 / all_ht_ranks)
     hits1_ht = np.mean(all_ht_ranks <= 1.0)
     hits3_ht = np.mean(all_ht_ranks <= 3.0)
@@ -202,6 +221,7 @@ def compute_metrics(ent_lst, rel_lst, _2_r_lst, _2_ht_lst, _n_r_lst, _n_ht_lst,
 
     eval_result = {
         'entity': {
+            'mr': mr_ent,
             'mrr': mrr_ent,
             'hits1': hits1_ent,
             'hits3': hits3_ent,
@@ -209,6 +229,7 @@ def compute_metrics(ent_lst, rel_lst, _2_r_lst, _2_ht_lst, _n_r_lst, _n_ht_lst,
             'hits10': hits10_ent
         },
         'relation': {
+            'mr': mr_rel,
             'mrr': mrr_rel,
             'hits1': hits1_rel,
             'hits3': hits3_rel,
@@ -216,6 +237,7 @@ def compute_metrics(ent_lst, rel_lst, _2_r_lst, _2_ht_lst, _n_r_lst, _n_ht_lst,
             'hits10': hits10_rel
         },
         'ht': {
+            'mr': mr_ht,
             'mrr': mrr_ht,
             'hits1': hits1_ht,
             'hits3': hits3_ht,
@@ -223,6 +245,7 @@ def compute_metrics(ent_lst, rel_lst, _2_r_lst, _2_ht_lst, _n_r_lst, _n_ht_lst,
             'hits10': hits10_ht
         },
         '2-ht': {
+            'mr': mr_2ht,
             'mrr': mrr_2ht,
             'hits1': hits1_2ht,
             'hits3': hits3_2ht,
@@ -230,6 +253,7 @@ def compute_metrics(ent_lst, rel_lst, _2_r_lst, _2_ht_lst, _n_r_lst, _n_ht_lst,
             'hits10': hits10_2ht
         },
         'n-ht': {
+            'mr': mr_nht,
             'mrr': mrr_nht,
             'hits1': hits1_nht,
             'hits3': hits3_nht,
@@ -237,6 +261,7 @@ def compute_metrics(ent_lst, rel_lst, _2_r_lst, _2_ht_lst, _n_r_lst, _n_ht_lst,
             'hits10': hits10_nht
         },
         'r': {
+            'mr': mr_r,
             'mrr': mrr_r,
             'hits1': hits1_r,
             'hits3': hits3_r,
@@ -244,6 +269,7 @@ def compute_metrics(ent_lst, rel_lst, _2_r_lst, _2_ht_lst, _n_r_lst, _n_ht_lst,
             'hits10': hits10_r
         },
         '2-r': {
+            'mr': mr_2r,
             'mrr': mrr_2r,
             'hits1': hits1_2r,
             'hits3': hits3_2r,
@@ -251,6 +277,7 @@ def compute_metrics(ent_lst, rel_lst, _2_r_lst, _2_ht_lst, _n_r_lst, _n_ht_lst,
             'hits10': hits10_2r
         },
         'n-r': {
+            'mr': mr_nr,
             'mrr': mrr_nr,
             'hits1': hits1_nr,
             'hits3': hits3_nr,
@@ -258,6 +285,7 @@ def compute_metrics(ent_lst, rel_lst, _2_r_lst, _2_ht_lst, _n_r_lst, _n_ht_lst,
             'hits10': hits10_nr
         },
         'n-a': {
+            'mr': mr_na,
             'mrr': mrr_na,
             'hits1': hits1_na,
             'hits3': hits3_na,
@@ -265,6 +293,7 @@ def compute_metrics(ent_lst, rel_lst, _2_r_lst, _2_ht_lst, _n_r_lst, _n_ht_lst,
             'hits10': hits10_na
         },
         'n-v': {
+            'mr': mr_nv,
             'mrr': mrr_nv,
             'hits1': hits1_nv,
             'hits3': hits3_nv,

@@ -43,6 +43,7 @@ parser.add_argument("--num_relations", type=int, default=531) #501
 parser.add_argument("--num_ent", type=int, default=0) #12554
 parser.add_argument("--max_seq_len", type=int, default=63) #11
 parser.add_argument("--max_arity", type=int, default=32) #6
+parser.add_argument("--nest_meta", type=bool, default=False) # nkg
 
 # Hyperparameter
 parser.add_argument("--hidden_dim", type=int, default=256)
@@ -120,16 +121,23 @@ def main(limit=1e9):
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, 
                                 shuffle=False, num_workers=args.num_workers)
     max_train_steps = args.epoch * len(train_loader)
-    triple_train, graph_gat, graph, r, edge_norm, selected = build_graph(vocabulary, train_examples, args.hyperedge_dropout, device, args)
-    if len(devices) > 1:
-        model = torch.nn.DataParallel(Transformer(triple_train, graph_gat, graph, r, edge_norm, selected,args.num_entities, args.num_relations, args.vocab_size, args.local_layers, args.global_layers, args.hidden_dim,
-                                                        args.local_heads, args.global_heads, args.use_global, args.local_dropout, args.global_dropout, 
-                                                        args.decoder_activation, args.global_activation, args.use_edge, args.remove_mask, args.use_node), device_ids=devices)
-        model.to(device)
+    if args.dataset in ["FBHE", "FBH", "DBHE"]:
+        train_atomic_examples, _ = read_examples("/".join(args.train_file.split("/")[:3])+"/train.json", args.max_arity)
+        print(f'num_train:{len(train_atomic_examples)}')
+        args.num_entities = args.vocab_size - args.num_relations - 2 - len(train_atomic_examples)
+        args.num_ent = args.num_entities
+        print(f'num_entities: {args.num_entities}')
+        triple_train, graph_gat, graph, r, edge_norm, selected,is_atomic = build_graph(vocabulary, train_atomic_examples, args.hyperedge_dropout, device, args)
     else:
-        model = Transformer(triple_train, graph_gat, graph, r, edge_norm, selected, args.num_entities, args.num_relations, args.vocab_size, args.local_layers, args.global_layers, args.hidden_dim, args.local_heads, args.global_heads, 
-                                args.use_global, args.local_dropout, args.global_dropout, args.decoder_activation, args.global_activation, 
-                                args.use_edge, args.remove_mask, args.use_node).to(device)
+        triple_train, graph_gat, graph, r, edge_norm, selected,is_atomic = build_graph(vocabulary, train_examples, args.hyperedge_dropout, device, args)
+    # if len(devices) > 1:
+    #     model = torch.nn.DataParallel(Transformer(triple_train, graph_gat, graph, r, edge_norm, selected,args.num_entities, args.num_relations, args.vocab_size, args.local_layers, args.global_layers, args.hidden_dim,
+    #                                                     args.local_heads, args.global_heads, args.use_global, args.local_dropout, args.global_dropout, 
+    #                                                     args.decoder_activation, args.global_activation, args.use_edge, args.remove_mask, args.use_node), device_ids=devices)
+    #     model.to(device)
+    model = Transformer(args.nest_meta,args.dataset,is_atomic,triple_train, graph_gat, graph, r, edge_norm, selected, args.num_entities, args.num_relations, args.vocab_size, args.local_layers, args.global_layers, args.hidden_dim, args.local_heads, args.global_heads, 
+                            args.use_global, args.local_dropout, args.global_dropout, args.decoder_activation, args.global_activation, 
+                            args.use_edge, args.remove_mask, args.use_node).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay)
     scheduler = OneCycleLR(optimizer, max_lr=args.lr, total_steps=max_train_steps, 
@@ -150,6 +158,10 @@ def main(limit=1e9):
                 device=device)
         show_perforamance(eval_performance)
         return
+    if args.ckpt_save_dir != "ckpts":
+        ckpt = torch.load(args.ckpt_save_dir)
+        model.load_state_dict(ckpt,strict=False)
+        args.ckpt_save_dir = "ckpts"
     for epoch in range(limit):
         time_start_epoch = time.time()
         for item in tqdm(train_loader):
@@ -187,6 +199,7 @@ def main(limit=1e9):
                 args.dataset,
                 "epoch_"+str(epoch),
             ]
+        if epoch % 50 == 0 or epoch == limit - 1:
             torch.save(
                 model.state_dict(),
                 os.path.join(args.ckpt_save_dir, "_".join(Exp_name_params)+".ckpt"),
@@ -226,7 +239,7 @@ def predict(model, test_loader, all_features, vocabulary, device):
             batch_results = output.cpu().numpy()
             ent_ranks, rel_ranks, _2_r_ranks, _2_ht_ranks, \
             _n_r_ranks, _n_ht_ranks, _n_a_ranks, _n_v_ranks = batch_evaluation(
-                global_idx, batch_results, all_features, gt_dict, args.temp, args.dataset, args.num_relations, args.num_ent)
+                global_idx, batch_results, all_features, gt_dict, args.temp, args.nest_meta, args.dataset, args.num_relations, args.num_ent)
             ent_lst.extend(ent_ranks)
             rel_lst.extend(rel_ranks)
             _2_r_lst.extend(_2_r_ranks)
@@ -255,36 +268,40 @@ def predict(model, test_loader, all_features, vocabulary, device):
 def show_perforamance(eval_performance):
     def pad(x):
         return x + (10 - len(x)) * ' '
-    all_entity = f"{pad('ENTITY')}\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f" % (
+    all_entity = f"{pad('ENTITY')}\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f" % (
+        eval_performance['entity']['mr'],
         eval_performance['entity']['mrr'],
         eval_performance['entity']['hits1'],
         eval_performance['entity']['hits3'],
         eval_performance['entity']['hits5'],
         eval_performance['entity']['hits10'])
 
-    all_relation = f"{pad('RELATION')}\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f" % (
+    all_relation = f"{pad('RELATION')}\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f" % (
+        eval_performance['relation']['mr'],
         eval_performance['relation']['mrr'],
         eval_performance['relation']['hits1'],
         eval_performance['relation']['hits3'],
         eval_performance['relation']['hits5'],
         eval_performance['relation']['hits10'])
 
-    all_ht = f"{pad('HEAD/TAIL')}\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f" % (
+    all_ht = f"{pad('HEAD/TAIL')}\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f" % (
+        eval_performance['ht']['mr'],
         eval_performance['ht']['mrr'],
         eval_performance['ht']['hits1'],
         eval_performance['ht']['hits3'],
         eval_performance['ht']['hits5'],
         eval_performance['ht']['hits10'])
 
-    all_r = f"{pad('PRIMARY_R')}\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f" % (
+    all_r = f"{pad('PRIMARY_R')}\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f" % (
+        eval_performance['r']['mr'],
         eval_performance['r']['mrr'],
         eval_performance['r']['hits1'],
         eval_performance['r']['hits3'],
         eval_performance['r']['hits5'],
         eval_performance['r']['hits10'])
 
-    logger.info("\n-------- Evaluation Performance --------\n%s\n%s\n%s\n%s\n%s" % (
-        "\t".join([pad("TASK"), "MRR", "Hits@1", "Hits@3", "Hits@5", "Hits@10"]),
+    logger.info("\n-------- Evaluation Performance --------w\n%s\n%s\n%s\n%s\n%s" % (
+        "\t".join([pad("TASK"), "MR", "MRR", "Hits@1", "Hits@3", "Hits@5", "Hits@10"]),
         all_ht, all_r, all_entity, all_relation))
 
 if __name__ == '__main__':

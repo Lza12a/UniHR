@@ -171,3 +171,4 @@ data/yago11k
 data/test.py
 .DS_Store
 script.sh
+data/test.ipynb

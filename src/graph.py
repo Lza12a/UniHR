@@ -17,9 +17,10 @@ def build_graph(vocabulary, examples, hyperedge_dropout, device, args):
     s = []
     t = []
     r = []
-    print(args.num_entities)
+    is_atomic = []
+    print(f'num_entities:{args.num_entities}')
     for hyperedge, example in enumerate(examples):
-        s_gat.append(hyperedge+args.num_entities+args.num_relations)
+        s_gat.append(hyperedge+args.num_entities+args.num_relations) 
         t_gat.append(vocabulary.convert_tokens_to_ids([example.head])[0]-2-args.num_relations)
 
         s_gat.append(hyperedge+args.num_entities+args.num_relations)
@@ -31,18 +32,22 @@ def build_graph(vocabulary, examples, hyperedge_dropout, device, args):
         s.append(hyperedge+args.num_entities+args.num_relations)
         t.append(vocabulary.convert_tokens_to_ids([example.head])[0]-2-args.num_relations)
         r.append(args.num_relations*2)
+        is_atomic.append(0)
 
         s.append(hyperedge+args.num_entities+args.num_relations)
         t.append(vocabulary.convert_tokens_to_ids([example.relation])[0]-2+args.num_entities)
         r.append(args.num_relations*2+1)
+        is_atomic.append(0)
 
         s.append(hyperedge+args.num_entities+args.num_relations)
         t.append(vocabulary.convert_tokens_to_ids([example.tail])[0]-2-args.num_relations)
         r.append(args.num_relations*2+2)
+        is_atomic.append(0)
 
         s.append(vocabulary.convert_tokens_to_ids([example.head])[0]-2-args.num_relations)
         t.append(vocabulary.convert_tokens_to_ids([example.tail])[0]-2-args.num_relations)
         r.append(vocabulary.convert_tokens_to_ids([example.relation])[0]-2)
+        is_atomic.append(1)
 
         if example.auxiliary_info:
             for k,v in example.auxiliary_info.items():
@@ -55,6 +60,7 @@ def build_graph(vocabulary, examples, hyperedge_dropout, device, args):
                     s.append(hyperedge+args.num_entities+args.num_relations)
                     t.append(v_id[i]-2-args.num_relations)
                     r.append(k_id)
+                    is_atomic.append(0)
 
     #逆关系
     for hyperedge, example in enumerate(examples):
@@ -71,18 +77,22 @@ def build_graph(vocabulary, examples, hyperedge_dropout, device, args):
         t.append(hyperedge+args.num_entities+args.num_relations)
         s.append(vocabulary.convert_tokens_to_ids([example.head])[0]-2-args.num_relations)
         r.append(args.num_relations*2+3)
+        is_atomic.append(0)
 
         t.append(hyperedge+args.num_entities+args.num_relations)
         s.append(vocabulary.convert_tokens_to_ids([example.relation])[0]-2+args.num_entities)
         r.append(args.num_relations*2+4)
+        is_atomic.append(0)
 
         t.append(hyperedge+args.num_entities+args.num_relations)
         s.append(vocabulary.convert_tokens_to_ids([example.tail])[0]-2-args.num_relations)
         r.append(args.num_relations*2+5)
+        is_atomic.append(0)
 
         s.append(vocabulary.convert_tokens_to_ids([example.tail])[0]-2-args.num_relations)
         t.append(vocabulary.convert_tokens_to_ids([example.head])[0]-2-args.num_relations)
         r.append(vocabulary.convert_tokens_to_ids([example.relation])[0]-2+args.num_relations)
+        is_atomic.append(1)
         if example.auxiliary_info:
             for k,v in example.auxiliary_info.items():
                 k_id = vocabulary.convert_tokens_to_ids([k])[0]-2
@@ -95,16 +105,18 @@ def build_graph(vocabulary, examples, hyperedge_dropout, device, args):
                     t.append(hyperedge+args.num_entities+args.num_relations)
                     s.append(v_id[i]-2-args.num_relations)
                     r.append(k_id+args.num_relations)
+                    is_atomic.append(0)
+
     graph_gat = dgl.graph((s_gat, t_gat), num_nodes=selected+args.num_entities+args.num_relations)
     graph = dgl.graph((s, t), num_nodes=selected+args.num_entities+args.num_relations)
     node_norm = comp_deg_norm(graph, -1)
     edge_norm = node_norm_to_edge_norm(graph,node_norm)
-    return torch.tensor(triple_train), graph_gat.to(device), graph.to(device), torch.tensor(r), torch.tensor(edge_norm), selected
+    return torch.tensor(triple_train), graph_gat.to(device), graph.to(device), torch.tensor(r), torch.tensor(edge_norm), selected, torch.tensor(is_atomic)
 
 def comp_deg_norm(graph, power=-1):
     graph = graph.local_var()
-    print(graph.number_of_nodes())
-    print(graph.number_of_edges())
+    print(f'graph_num_nodes:{graph.number_of_nodes()}')
+    print(f'graph_num_edges:{graph.number_of_edges()}')
 
     in_deg = graph.in_degrees(range(graph.number_of_nodes())).float().numpy()
     norm = in_deg.__pow__(power)

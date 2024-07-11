@@ -7,21 +7,24 @@ import dgl.function as fn
 
 class CompGCNCov(nn.Module):
     """ The comp graph convolution layers, similar to https://github.com/malllabiisc/CompGCN"""
-    def __init__(self, in_channels, out_channels, act=lambda x: x, bias=True, drop_rate=0., opn='corr'):
+    def __init__(self, in_channels, out_channels, act=lambda x: x, bias=True, drop_rate=0., opn='corr', ent_num=0, rel_num=0):
         super(CompGCNCov, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.act = act  # activation function
         self.device = None
         self.rel = None
+        self.ent_num = ent_num
+        self.rel_num = rel_num
         self.opn = opn
         # relation-type specific parameter
         self.in_w = self.get_param([in_channels, out_channels])
         self.out_w = self.get_param([in_channels, out_channels])
         self.loop_w = self.get_param([in_channels, out_channels])
         self.w_rel = self.get_param([in_channels, out_channels])  # transform embedding of relations to next layer
-        self.loop_rel = self.get_param([1, in_channels])  # self-loop embedding
-
+        #self.loop_rel = self.get_param([1, in_channels])  # self-loop embedding
+        self.atomic = self.get_param([2,1])
+        self.sigmoid = nn.Sigmoid()
         self.drop = nn.Dropout(drop_rate)
         self.bn = torch.nn.BatchNorm1d(out_channels)
         self.bias = nn.Parameter(torch.zeros(out_channels)) if bias else None
@@ -43,7 +46,9 @@ class CompGCNCov(nn.Module):
         # first half edges are all in-directions, last half edges are out-directions.
         msg = torch.cat([torch.matmul(edge_data[:edge_num // 2, :], self.in_w),
                          torch.matmul(edge_data[edge_num // 2:, :], self.out_w)])
-        msg = msg * edges.data['norm'].reshape(-1, 1)  # [E, D] * [E, 1]
+        
+        msg = (msg * edges.data['norm'].unsqueeze(1).repeat(1, self.out_channels)*edges.data['atomic'].unsqueeze(1).repeat(1, self.out_channels)*self.sigmoid(self.atomic[0]) + \
+               msg * edges.data['norm'].unsqueeze(1).repeat(1, self.out_channels)*(1-edges.data['atomic']).unsqueeze(1).repeat(1, self.out_channels)*self.sigmoid(self.atomic[1]))  # [E, D] * [E, 1]
         return {'msg': msg}
 
     def reduce_func(self, nodes: dgl.udf.NodeBatch):
@@ -73,21 +78,24 @@ class CompGCNCov(nn.Module):
         else:
             raise KeyError(f'composition operator {self.opn} not recognized.')
 
-    def forward(self, g: dgl.graph, x, rel_repr, edge_type, edge_norm):
+    def forward(self, g: dgl.graph, x, rel_repr, edge_type, edge_norm, is_atomic):
         self.device = x.device
         g = g.local_var()
         g.ndata['h'] = x
         edge_type = edge_type.to(self.device)
         edge_norm = edge_norm.to(self.device)
+        is_atomic = is_atomic.to(self.device)
         g.edata['type'] = edge_type
         g.edata['norm'] = edge_norm
+        g.edata['atomic'] = is_atomic
         if self.rel_wt is None:
             self.rel = rel_repr
         else:
             self.rel = torch.mm(self.rel_wt, rel_repr)  # [num_rel*2, num_base] @ [num_base, in_c]
         
         g.update_all(self.message_func, fn.sum(msg='msg', out='h'), self.reduce_func)
-        x = g.ndata.pop('h') + torch.mm(self.comp(x, self.loop_rel), self.loop_w) / 3
+        # x = g.ndata.pop('h') + torch.mm(self.comp(x, self.loop_rel), self.loop_w) / 3
+        x = g.ndata.pop('h') + torch.mm(x, self.loop_w)/3
         if self.bias is not None:
             x = x + self.bias
         x = self.bn(x)
@@ -95,12 +103,17 @@ class CompGCNCov(nn.Module):
         return self.act(x), torch.matmul(self.rel, self.w_rel)
 
 class Global(nn.Module):
-    def __init__(self, triple_train, graph_gat, graph, r, edge_norm, selected, ent_num, rel_num, dim, use_global, num_layers, heads, dropout, activation):
+    def __init__(self, nest_meta,vocab_size, dataset, is_atomic, triple_train, graph_gat, graph, r, edge_norm, selected, ent_num, rel_num, dim, use_global, num_layers, heads, dropout, activation):
+        self.nest_meta = nest_meta
+        self.vocab_size = vocab_size
         self.triple_train = triple_train
         self.graph_gat = graph_gat
         self.graph = graph
+        self.dim = dim
         self.edge_type = r
         self.edge_norm = edge_norm
+        self.dataset = dataset
+        self.is_atomic = is_atomic
         self.selected = selected
         self.ent_num = ent_num
         self.rel_num = rel_num
@@ -109,7 +122,7 @@ class Global(nn.Module):
         self.layers1 = nn.ModuleList()
         for _ in range(num_layers):
             self.layers0.append(GATv2Conv(dim, dim // heads, num_heads=heads,allow_zero_in_degree=True, feat_drop=dropout))
-            self.layers1.append(CompGCNCov(dim, dim, torch.tanh, bias = 'False', drop_rate = dropout, opn = 'corr'))
+            self.layers1.append(CompGCNCov(dim, dim, torch.tanh, bias = 'False', drop_rate = dropout, opn = 'corr',ent_num = self.ent_num,rel_num=self.rel_num))
         self.num_layers = num_layers
         
         self.rel_node_emb = nn.Parameter(torch.Tensor(dim, dim))
@@ -123,10 +136,16 @@ class Global(nn.Module):
 
         self.special_embedding = nn.parameter.Parameter(torch.Tensor(2, dim))
         nn.init.normal_(self.special_embedding, mean=0, std=0.02)
-        self.ent_embedding = nn.parameter.Parameter(torch.Tensor(ent_num, dim))
-        nn.init.normal_(self.ent_embedding, mean=0, std=0.02)
-        self.rel_embedding = nn.parameter.Parameter(torch.Tensor(rel_num*2+6, dim))
-        nn.init.normal_(self.rel_embedding, mean=0, std=0.02)
+        if not nest_meta:
+            self.ent_embedding = nn.parameter.Parameter(torch.Tensor(ent_num, dim))
+            nn.init.normal_(self.ent_embedding, mean=0, std=0.02)
+            self.rel_embedding = nn.parameter.Parameter(torch.Tensor(rel_num*2+6, dim))
+            nn.init.normal_(self.rel_embedding, mean=0, std=0.02)
+        else:
+            self.ent_embedding = nn.parameter.Parameter(torch.Tensor(ent_num, dim),requires_grad=False)
+            nn.init.normal_(self.ent_embedding, mean=0, std=0.02)
+            self.rel_embedding = nn.parameter.Parameter(torch.Tensor(rel_num*2+6, dim))
+            nn.init.normal_(self.rel_embedding, mean=0, std=0.02)
 
         if activation == "gelu":
             self.activate = nn.GELU()
@@ -144,18 +163,25 @@ class Global(nn.Module):
         if self.use_global is True:
             x_r = torch.matmul(self.rel_embedding,self.rel_node_emb) # [num_rel*2,dim]
             fact_emb = self.get_fact_emb(self.triple_train,x_r,self.ent_embedding)
+            #fact_emb = torch.zeros(self.triple_train.shape[0], self.dim).to(ent_embedding.device)
             ent_embedding = torch.cat((ent_embedding, x_r[:self.rel_num], fact_emb), dim = 0)  # embedding of entities
             for i in range(self.num_layers):
                 tmp = self.layers0[i](self.graph_gat, ent_embedding).reshape(ent_embedding.shape[0], -1)
                 tmp = self.activate(tmp)
                 ent_embedding = ent_embedding + tmp
-                tmp1, tmp2 = self.layers1[i](self.graph, ent_embedding, rel_embedding, self.edge_type, self.edge_norm)
-                tmp1 = self.activate(tmp1)
-                tmp2 = self.activate(tmp2)
-                ent_embedding = ent_embedding + tmp1
-                rel_embedding = rel_embedding + tmp2
-        return torch.cat([self.special_embedding, rel_embedding[:self.rel_num], ent_embedding[:self.ent_num]], dim=0)
-    
+                # tmp1, tmp2 = self.layers1[i](self.graph, ent_embedding, rel_embedding, self.edge_type, self.edge_norm, self.is_atomic)
+                # tmp1 = self.activate(tmp1)
+                # tmp2 = self.activate(tmp2)
+                # ent_embedding = ent_embedding + tmp1
+                # rel_embedding = rel_embedding + tmp2
+        if self.dataset not in ["FBHE","FBH","DBHE"]:
+            return torch.cat([self.special_embedding, rel_embedding[:self.rel_num], ent_embedding[:self.ent_num]], dim=0)
+        elif self.nest_meta:
+            return torch.cat([self.special_embedding, rel_embedding[:self.rel_num], ent_embedding[:self.ent_num], ent_embedding[self.ent_num+self.rel_num:]], dim=0)
+        else:
+            return torch.cat([self.special_embedding, rel_embedding[:self.rel_num], ent_embedding[:self.ent_num], torch.zeros(self.vocab_size-self.ent_num-self.rel_num-2,self.dim).to(ent_embedding.device)], dim=0)
+
+
     def get_fact_emb(self, triple_train, rel_emb, ent_emb):
         # triple_train #[num_selected,3]
         fact_emb = []
@@ -315,10 +341,11 @@ class TransformerLayer(nn.Module):
         return x
 
 class Transformer(nn.Module):
-    def __init__(self, triple_train, graph_gat, graph, r, edge_norm, selected,ent_num: int,rel_num: int, vocab_size: int, local_layers: int, global_layers: int, hidden_dim: int,
+    def __init__(self, nest_meta, dataset, is_atomic, triple_train, graph_gat, graph, r, edge_norm, selected,ent_num: int,rel_num: int, vocab_size: int, local_layers: int, global_layers: int, hidden_dim: int,
             local_heads: int, global_heads: int, use_global: bool, local_dropout: float, global_dropout: float, 
             decoder_activation: str, global_activation: str, use_edge: bool, remove_mask: bool, use_node: bool, bias=True, times=2) -> None:
         super().__init__()
+        self.nest_meta = nest_meta
         self.hidden_dim = hidden_dim
         self.layers = nn.ModuleList()
         for _ in range(local_layers):
@@ -333,7 +360,7 @@ class Transformer(nn.Module):
         self.edge_key_embedding = nn.Embedding(14, hidden_dim // local_heads, padding_idx=0)
         self.edge_value_embedding = nn.Embedding(14, hidden_dim // local_heads, padding_idx=0)
         self.init_params()
-        self.globl = Global(triple_train, graph_gat, graph, r, edge_norm, selected, ent_num, rel_num, hidden_dim, use_global, global_layers, global_heads, global_dropout, global_activation)
+        self.globl = Global(nest_meta,vocab_size, dataset, is_atomic, triple_train, graph_gat, graph, r, edge_norm, selected, ent_num, rel_num, hidden_dim, use_global, global_layers, global_heads, global_dropout, global_activation)
     def init_params(self):
         for name, param in self.named_parameters():
             if "norm" in name:
