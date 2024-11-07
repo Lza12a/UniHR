@@ -71,7 +71,7 @@ def batch_evaluation(global_idx, batch_results, all_features, gt_dict, is_temp, 
         # filter for wikimix
             # wikidata12k
         if dataset == "wikimix":
-            if (feature.input_ids[4]<44639 and feature.input_ids[4]>=44020) or (feature.input_ids[6]<44639 and feature.input_ids[6]>=44020):
+            if (feature.input_ids[4]>=44020) or (feature.input_ids[6]>=44020):
                 if pos in [0,2]:
                     result[44020:] = -np.Inf
                     result[:31466] = -np.Inf

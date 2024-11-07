@@ -103,7 +103,7 @@ class CompGCNCov(nn.Module):
         return self.act(x), torch.matmul(self.rel, self.w_rel)
 
 class Global(nn.Module):
-    def __init__(self, nest_meta,vocab_size, dataset, is_atomic, triple_train, graph_gat, graph, r, edge_norm, selected, ent_num, rel_num, dim, use_global, num_layers, heads, dropout, activation):
+    def __init__(self, emb_time, nest_meta, vocab_size, dataset, is_atomic, triple_train, graph_gat, graph, r, edge_norm, selected, ent_num, rel_num, dim, use_global, num_layers, heads, dropout, activation):
         self.nest_meta = nest_meta
         self.vocab_size = vocab_size
         self.triple_train = triple_train
@@ -117,6 +117,7 @@ class Global(nn.Module):
         self.selected = selected
         self.ent_num = ent_num
         self.rel_num = rel_num
+        self.emb_time = emb_time
         super(Global, self).__init__()
         self.layers0 = nn.ModuleList()
         self.layers1 = nn.ModuleList()
@@ -136,8 +137,25 @@ class Global(nn.Module):
 
         self.special_embedding = nn.parameter.Parameter(torch.Tensor(2, dim))
         nn.init.normal_(self.special_embedding, mean=0, std=0.02)
+
+        ## temporal
+        if emb_time != None:
+            self.num_time = emb_time.shape[0]
+            # 计算最小值和最大值
+            min_val = emb_time.min(dim=0, keepdim=True).values
+            max_val = emb_time.max(dim=0, keepdim=True).values
+            # 执行最小-最大归一化
+            self.emb_time = (emb_time - min_val) / (max_val - min_val + 1e-6)  # 加上一个小常数以避免除零
+
+            self.t1 = nn.Linear(in_features=1, out_features=dim)  
+            self.t2 = nn.Linear(in_features=1, out_features=dim)  
+            self.t1_weight = nn.Parameter(torch.randn(1))
+            self.t2_weight = nn.Parameter(torch.randn(1))
+        else:
+            self.num_time = 0  
+
         if not nest_meta:
-            self.ent_embedding = nn.parameter.Parameter(torch.Tensor(ent_num, dim))
+            self.ent_embedding = nn.parameter.Parameter(torch.Tensor(ent_num-self.num_time, dim))
             nn.init.normal_(self.ent_embedding, mean=0, std=0.02)
             self.rel_embedding = nn.parameter.Parameter(torch.Tensor(rel_num*2+6, dim))
             nn.init.normal_(self.rel_embedding, mean=0, std=0.02)
@@ -158,10 +176,15 @@ class Global(nn.Module):
         self.use_global = use_global
 
     def forward(self):
-        ent_embedding = self.ent_embedding
+        if self.emb_time != None:
+            emb_time = torch.sin(self.t1_weight * self.t1(self.emb_time)) + self.t2_weight * self.t2(self.emb_time)
+            ent_embedding = torch.cat((self.ent_embedding,emb_time),dim=0)
+        else:
+            ent_embedding = self.ent_embedding
         rel_embedding = self.rel_embedding.to(ent_embedding.device)
         if self.use_global is True:
             x_r = torch.matmul(self.rel_embedding,self.rel_node_emb) # [num_rel*2,dim]
+            #x_r = self.rel_embedding
             fact_emb = self.get_fact_emb(self.triple_train,x_r,self.ent_embedding)
             #fact_emb = torch.zeros(self.triple_train.shape[0], self.dim).to(ent_embedding.device)
             ent_embedding = torch.cat((ent_embedding, x_r[:self.rel_num], fact_emb), dim = 0)  # embedding of entities
@@ -343,7 +366,7 @@ class TransformerLayer(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, nest_meta, dataset, is_atomic, triple_train, graph_gat, graph, r, edge_norm, selected,ent_num: int,rel_num: int, vocab_size: int, local_layers: int, global_layers: int, hidden_dim: int,
             local_heads: int, global_heads: int, use_global: bool, local_dropout: float, global_dropout: float, 
-            decoder_activation: str, global_activation: str, use_edge: bool, remove_mask: bool, use_node: bool, bias=True, times=2) -> None:
+            decoder_activation: str, global_activation: str, use_edge: bool, remove_mask: bool, use_node: bool, emb_time, bias=True, times=2) -> None:
         super().__init__()
         self.nest_meta = nest_meta
         self.hidden_dim = hidden_dim
@@ -360,7 +383,7 @@ class Transformer(nn.Module):
         self.edge_key_embedding = nn.Embedding(14, hidden_dim // local_heads, padding_idx=0)
         self.edge_value_embedding = nn.Embedding(14, hidden_dim // local_heads, padding_idx=0)
         self.init_params()
-        self.globl = Global(nest_meta,vocab_size, dataset, is_atomic, triple_train, graph_gat, graph, r, edge_norm, selected, ent_num, rel_num, hidden_dim, use_global, global_layers, global_heads, global_dropout, global_activation)
+        self.globl = Global(emb_time, nest_meta, vocab_size, dataset, is_atomic, triple_train, graph_gat, graph, r, edge_norm, selected, ent_num, rel_num, hidden_dim, use_global, global_layers, global_heads, global_dropout, global_activation)
     def init_params(self):
         for name, param in self.named_parameters():
             if "norm" in name:

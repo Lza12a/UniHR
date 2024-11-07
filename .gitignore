@@ -164,9 +164,13 @@ ipynb_checkpoints/
 ckpts/*
 results/*
 
+ckpts_wikimix0.5
+ckpts_wikimix0.85
 data/wd50k_33
 data/wd50k_66
 data/wd50k_100
+data/icews05-15
+data/icews14
 data/yago11k
 data/test.py
 .DS_Store

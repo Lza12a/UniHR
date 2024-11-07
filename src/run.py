@@ -77,13 +77,30 @@ parser.add_argument("--use_node", type=bool, default=False)
 parser.add_argument("--result_save_dir", type=str, default="results")
 parser.add_argument("--test_only", action='store_true', default=False)
 parser.add_argument("--ckpt_save_dir", type=str, default="ckpts")
+parser.add_argument("--ckpt", type=str, default="ckpts")
 
 args = parser.parse_args()
 args.temp = False
 args.num_entities = args.vocab_size - args.num_relations - 2
-if args.dataset in ['wikidata12k', 'yago11k']:
+if args.dataset in ['wikidata12k', 'yago11k','icews14','icews05-15',"wikimix"]:
     args.temp = True
+    with open(args.vocab_file, "r", encoding='utf-8') as f:
+        lines = f.readlines()[2 + args.num_relations + args.num_ent+1:]
+    if args.dataset == 'wikidata12k':
+        emb_time = torch.tensor([float(line.split("-##-##")[0]) for line in lines]).unsqueeze(1)
+    elif args.dataset == 'yago11k':
+        emb_time = torch.tensor([date_to_time(line) for line in lines]).unsqueeze(1)
+    elif args.dataset == 'icews14':
+        emb_time = torch.tensor([date_to_time(line) for line in lines]).unsqueeze(1)
+    elif args.dataset == 'icews05-15':
+        with open(args.vocab_file, "r", encoding='utf-8') as f:
+            lines = f.readlines()[2 + args.num_relations + args.num_ent:]
+        emb_time = torch.tensor([date_to_time(line) for line in lines]).unsqueeze(1)
+    elif args.dataset == 'wikimix':
+        emb_time = torch.tensor([date_to_time(line) for line in lines]).unsqueeze(1)
+    emb_time = emb_time.to(torch.device(f"cuda:{args.device[0]}"))
 else :
+    emb_time = None
     args.num_ent = args.num_entities
 if not os.path.exists(args.result_save_dir):
     os.mkdir(args.result_save_dir)
@@ -137,7 +154,7 @@ def main(limit=1e9):
     #     model.to(device)
     model = Transformer(args.nest_meta,args.dataset,is_atomic,triple_train, graph_gat, graph, r, edge_norm, selected, args.num_entities, args.num_relations, args.vocab_size, args.local_layers, args.global_layers, args.hidden_dim, args.local_heads, args.global_heads, 
                             args.use_global, args.local_dropout, args.global_dropout, args.decoder_activation, args.global_activation, 
-                            args.use_edge, args.remove_mask, args.use_node).to(device)
+                            args.use_edge, args.remove_mask, args.use_node, emb_time).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), weight_decay=args.weight_decay)
     scheduler = OneCycleLR(optimizer, max_lr=args.lr, total_steps=max_train_steps, 
@@ -146,7 +163,7 @@ def main(limit=1e9):
     training_time = int(0)
     # predict only
     if args.test_only:
-        ckpt = torch.load(args.ckpt_save_dir)
+        ckpt = torch.load(args.ckpt)
         for key in ckpt.keys():
             print(key)
         model.load_state_dict(ckpt,strict=False)
@@ -158,10 +175,10 @@ def main(limit=1e9):
                 device=device)
         show_perforamance(eval_performance)
         return
-    if args.ckpt_save_dir != "ckpts":
-        ckpt = torch.load(args.ckpt_save_dir)
+    if args.ckpt != "ckpts":
+        ckpt = torch.load(args.ckpt)
         model.load_state_dict(ckpt,strict=False)
-        args.ckpt_save_dir = "ckpts"
+
     for epoch in range(limit):
         time_start_epoch = time.time()
         for item in tqdm(train_loader):
@@ -203,7 +220,8 @@ def main(limit=1e9):
             torch.save(
                 model.state_dict(),
                 os.path.join(args.ckpt_save_dir, "_".join(Exp_name_params)+".ckpt"),
-                )
+                )      
+
 def calculate_training_time(training_time: int):
     minutes, seconds = divmod(training_time, 60)
     hours, minutes = divmod(minutes, 60)

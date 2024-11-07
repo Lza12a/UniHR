@@ -2,6 +2,7 @@ import json
 import collections
 import numpy as np
 import torch.utils.data.dataset as Dataset
+import re
 
 class Vocabulary(object):
     def __init__(self, vocab_file, num_relations, num_entities, num_ent):
@@ -89,6 +90,15 @@ class NaryFeature(object):  # samples for training
         self.mask_type = mask_type          
         self.arity = arity
 
+def date_to_time(date_str):
+    date_str = date_str.strip().replace("##",'01').replace("#",'0')
+    d=int(date_str.split('-')[-1])
+    m=int(date_str.split('-')[-2])
+    y=int(date_str.split('-')[-3])
+    if date_str[0]=='-':
+        y=-y
+    return y*365+m*30+d      
+
 def read_examples(input_file, max_arity):
     """
     Read a n-ary json file into a list of NaryExample.
@@ -166,6 +176,9 @@ def convert_examples_to_features(examples, vocabulary, max_arity, max_seq_length
         for mask_position in range(max_seq_length):
             if orig_input_tokens[mask_position] == "[PAD]":
                 continue
+            # # filter time
+            # if re.search(r'....-..-..',orig_input_tokens[mask_position]) or re.search(r'...-..-..',orig_input_tokens[mask_position]):
+            #     continue
             mask_label = vocabulary.vocab[orig_input_tokens[mask_position]]
             mask_type = 1 if mask_position % 2== 0 else -1
 
